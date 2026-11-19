@@ -3,6 +3,7 @@
 [![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![Framework](https://img.shields.io/badge/framework-Flask%20%7C%20SQLAlchemy-red.svg)](https://flask.palletsprojects.com/)
 [![Database](https://img.shields.io/badge/database-SQLite3%20(WAL%20Mode)-green.svg)](https://www.sqlite.org/)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fpretomsid%2Fmedisafe&project-name=medisafe)
 [![License](https://img.shields.io/badge/license-Academic%20%2F%20Research-lightgrey.svg)](#license)
 
 **MediSafe** is an intelligent Clinical Decision Support System (CDSS) designed to enhance patient safety by intercepting adverse drug-drug interactions, detecting therapeutic duplications, screening patient-specific allergies/contraindications, recommending cost-effective bioequivalent alternative medicines, and managing encrypted medical records.
