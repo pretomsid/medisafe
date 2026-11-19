@@ -1,0 +1,9 @@
+flask==3.1.*
+flask-sqlalchemy==3.1.*
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+python-multipart>=0.0.9
+pydantic>=2.0.0
+pytest
+# MySQL-এ যেতে চাইলে নিচের লাইন চালু করে .env-এ DATABASE_URL বদলান
+# pymysql
