@@ -18,9 +18,8 @@ ENV/
 htmlcov/
 
 # Local databases & uploads
-*.db
-*.sqlite3
-backend/instance/
+backend/instance/*
+!backend/instance/medisafe.db
 backend/uploads/*
 !backend/uploads/.gitkeep
 

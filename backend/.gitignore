@@ -1,6 +1,11 @@
 .venv/
 __pycache__/
-instance/
-uploads/
-*.db
+instance/*
+!instance/medisafe.db
+instance/secret_key
+instance/*.bak
+instance/*-wal
+instance/*-shm
+uploads/*
+!uploads/.gitkeep
 .env
