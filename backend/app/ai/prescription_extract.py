@@ -116,7 +116,7 @@ def _gemini(data, ext):
             try:
                 r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                                   headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                                  json={**body, "generationConfig": cfg}, timeout=min(40, left))
+                                  json={**body, "generationConfig": cfg}, timeout=min(22, left))
             except Exception as e:
                 trace.append(f"{model} think={'off' if think else 'default'} {type(e).__name__} {time.time() - t0:.0f}s")
                 errors.append(f"{model}: {type(e).__name__}")
@@ -164,18 +164,19 @@ def _gemini_models(requests, key):
             for m in r.json().get("models", []) if r.status_code == 200 else []:
                 n = m.get("name", "").replace("models/", "")
                 if ("generateContent" not in m.get("supportedGenerationMethods", []) or "flash" not in n
-                        or re.search(r"image|tts|live|audio|embed|thinking|exp|lite|robotics|computer|learnlm", n)):
+                        or re.search(r"image|tts|live|audio|embed|thinking|exp|robotics|computer|learnlm|latest", n)):
                     continue
                 v = re.search(r"(\d+(?:\.\d+)?)", n)
-                cands.append((0 if "preview" in n else 1, float(v.group(1)) if v else 0.0, n))
-            names = [n for _, _, n in sorted(cands, reverse=True)][:4]
+                # newest first, but "lite" (weaker) and "preview" models only after the regular ones
+                cands.append((0 if "lite" in n else 1, 0 if "preview" in n else 1, float(v.group(1)) if v else 0.0, n))
+            names = [c[-1] for c in sorted(cands, reverse=True)][:8]
         except Exception:
             names = []
         if names:
             _GEMINI_LIST["names"] = names
         else:   # discovery failed: fall back to likely names for this call only
             return list(dict.fromkeys(out + ["gemini-flash-latest", "gemini-2.5-flash"]))
-    return list(dict.fromkeys(out + _GEMINI_LIST["names"]))[:4]
+    return list(dict.fromkeys(out + _GEMINI_LIST["names"]))[:9]
 
 
 def _claude(data, ext):
