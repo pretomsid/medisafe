@@ -100,7 +100,7 @@ def _gemini(data, ext):
                                     {"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0}}
     key = os.environ["GEMINI_API_KEY"]
-    errors = []
+    errors, trace = [], []
     deadline = time.time() + 75                   # whole attempt must finish well inside the serverless limit
     for model in _gemini_models(requests, key):
         # "thinking" makes newer models take a minute for a task that needs none: switch it off (some models reject
@@ -112,13 +112,16 @@ def _gemini(data, ext):
             cfg = dict(body["generationConfig"])
             if think:
                 cfg["thinkingConfig"] = {"thinkingBudget": 0}
+            t0 = time.time()
             try:
                 r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                                   headers={"x-goog-api-key": key, "Content-Type": "application/json"},
                                   json={**body, "generationConfig": cfg}, timeout=min(40, left))
             except Exception as e:
+                trace.append(f"{model} think={'off' if think else 'default'} {type(e).__name__} {time.time() - t0:.0f}s")
                 errors.append(f"{model}: {type(e).__name__}")
-                break                               # timeout / network: next model, do not repeat
+                break
+            trace.append(f"{model} think={'off' if think else 'default'} HTTP {r.status_code} {time.time() - t0:.0f}s")                               # timeout / network: next model, do not repeat
             if r.status_code == 200:
                 try:
                     out = json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
@@ -126,7 +129,9 @@ def _gemini(data, ext):
                     errors.append(f"{model}: unreadable reply")
                     break
                 _GEMINI_OK["model"] = model         # remember what worked for this process
-                return _finish(out)
+                res = _finish(out)
+                res["engine"], res["trace"] = f"gemini:{model}", trace
+                return res
             msg = ""
             try:
                 msg = r.json().get("error", {}).get("message", "")
