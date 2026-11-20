@@ -371,3 +371,28 @@ def test_gemini_model_discovery_and_fallback(monkeypatch):
     px._GEMINI_OK.clear()
     bad = px.extract(b"x", "jpg")
     assert bad["status"] == "error" and "429" in bad["message"]
+
+
+def test_manual_typed_prescription(client):
+    register(client)
+    r = client.post("/api/records/typed", json={"title": "My Rx", "text":
+                    "1. Tab. Alpha 500 mg 1+0+1\nBeta\nZxqvol 10 mg SOS\nAcyclovir\n\n"})
+    assert r.status_code == 201
+    rec = r.get_json()
+    meds = {m["name"]: m for m in rec["extracted"]["medicines"]}
+    assert set(meds) == {"Alpha", "Beta", "Zxqvol", "Acyclovir"}       # unknown names are kept, not dropped
+    assert meds["Alpha"]["strength"] == "500 mg" and meds["Alpha"]["frequency"] == "1+0+1"
+    assert meds["Alpha"]["match"]["generic"] == "Paracetamol" and meds["Zxqvol"]["match"] is None
+    assert meds["Acyclovir"]["match"]["generic"] == "Acyclovir"      # generic names work too
+    assert rec["file"] == "" and client.get(f"/api/records/{rec['id']}/file").status_code == 404
+    out = client.post(f"/api/records/{rec['id']}/import-meds", json={"items": [{"name": "Alpha", "ingredient": "Paracetamol"}]})
+    assert out.status_code == 200 and len(out.get_json()["added"]) == 1
+    assert client.post("/api/records/typed", json={"text": "  "}).status_code == 400
+    assert client.post("/api/records/typed", json={"text": "x", "date": "2999-01-01"}).status_code in (400,)
+
+
+def test_typed_text_on_existing_record_keeps_unknown_names(client):
+    register(client)
+    rid = _upload_rx(client).get_json()["id"]
+    d = client.post(f"/api/records/{rid}/read-text", json={"text": "Alpha 500 mg\nZxqvol 10 mg", "manual": True}).get_json()
+    assert [m["name"] for m in d["extracted"]["medicines"]] == ["Alpha", "Zxqvol"] and d["extracted"]["engine"] == "manual"

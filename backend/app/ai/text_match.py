@@ -56,3 +56,34 @@ def find_medicines(text, brands, limit=30):
             if len(found) >= limit:
                 return found
     return found
+
+
+PREFIX = re.compile(r"^\s*(?:\d+\s*[\.\)]\s*)?(?:tab(?:let)?s?|cap(?:sule)?s?|syp|syrup|inj(?:ection)?|drops?)?\.?\s*", re.I)
+
+
+def parse_manual(text, brands, limit=30):
+    """Typed list, one medicine per line ("Napa 500 mg 1+1+1"). Unlike find_medicines, names that are not in the
+    catalog are kept too (the user typed them on purpose), so nothing they enter is silently dropped."""
+    meds, seen = [], set()
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if len(line) < 2:
+            continue
+        hits = find_medicines(line, brands)
+        if not hits:
+            clean = PREFIX.sub("", line, count=1)
+            m = re.match(r"[A-Za-z][A-Za-z\-\. ]*?(?=\s+\d|\s*[,;(]|\s*$)", clean)
+            name = (m.group(0) if m else clean.split()[0] if clean.split() else "").strip(" .-")[:120]
+            if len(name) < 2:
+                continue
+            strength, freq, dose, dur = STRENGTH.search(line), FREQ.search(line), DOSE.search(line), DURATION.search(line)
+            hits = [{"name": name, "strength": f"{strength.group(1)} {strength.group(2).lower()}" if strength else None,
+                     "dose": dose.group(0) if dose else None, "frequency": freq.group(0) if freq else None,
+                     "duration": dur.group(0) if dur else None, "uncertain": False}]
+        for h in hits:
+            if h["name"].lower() not in seen:
+                seen.add(h["name"].lower())
+                meds.append(h)
+        if len(meds) >= limit:
+            break
+    return meds[:limit]

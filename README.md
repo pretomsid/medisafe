@@ -138,7 +138,7 @@ Three ways to get the medicines in, all optional and the first one is completely
 1. **Free, no key (default):** the photo is read **in your browser** with Tesseract.js (OCR), and only the recognised text is sent to the server, which finds medicine names by matching them against the 21,712-brand catalog (`backend/app/ai/text_match.py`). Strength, frequency and duration are picked from the same line. Works well on **printed** prescriptions (JPG/PNG); handwriting and PDFs are not reliable here.
 2. **Free Gemini key (better for handwriting and PDFs):** set `GEMINI_API_KEY` (get one free at aistudio.google.com/apikey, no card). Note that Google's free tier may use submitted content to improve its products, so do not use it with real patient data.
 3. **Claude key (paid):** set `ANTHROPIC_API_KEY` (`PRESCRIPTION_MODEL` to change the model). Used only if no Gemini key is set.
-4. **Manual:** choose "Store only (manual)" when uploading, or add medicines yourself under My Medications.
+4. **Manual (always available, no photo and no key):** the yellow **Type medicines manually** button on Medical Records. Write one medicine per line (brand or generic, optional strength and frequency); unknown names are kept. It goes through the same review and safety check. You can also choose "Store only (manual)" when uploading, or add medicines under My Medications.
 
 Whatever reads the file, the result is a suggestion:
 

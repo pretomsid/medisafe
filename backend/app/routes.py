@@ -179,6 +179,42 @@ def _brand_index():
     return _BRANDS
 
 
+def _generic_match(name):
+    n = (name or "").strip().casefold()
+    if len(n) < 4:
+        return None
+    g = (Generic.query.filter_by(name_key=n).first()
+         or Generic.query.filter(Generic.name_key.like(n + "%")).order_by(db.func.length(Generic.name_key)).first())
+    return {"id": None, "brand": None, "generic": g.name, "strength": None} if g else None
+
+
+@bp.post("/records/typed")
+@login_required
+def typed_prescription():
+    """Manual entry: the user types the medicines (one per line); no file needed. Creates a prescription record
+    that goes through the same review + safety check as an uploaded one."""
+    d = request.get_json(silent=True) or {}
+    txt = d.get("text")
+    if not isinstance(txt, str) or len(txt) > 5000:
+        return error("Type the medicine names, one per line")
+    title = text(d.get("title"), 200) or "Typed prescription"
+    rdate = (d.get("date") or "").strip() or date.today().isoformat()
+    if not valid_date(rdate):
+        return error("Date must be a valid date that is not in the future")
+    meds = text_match.parse_manual(txt, _brand_index())
+    if not meds:
+        return error("Type at least one medicine name")
+    for m in meds:
+        m["match"] = _catalog_match(m["name"]) or _generic_match(m["name"])
+    r = Record(user_id=g.user.id, title=title, category="Prescription", record_date=rdate,
+               extracted={"status": "ok", "message": "", "doctor": None, "date": None, "diagnosis": None,
+                          "medicines": meds, "imported": False, "engine": "manual"})
+    db.session.add(r)
+    log(g.user.id, f"Typed prescription: {title}")
+    db.session.commit()
+    return jsonify(r.to_dict()), 201
+
+
 @bp.post("/records/<int:rid>/read-text")
 @login_required
 def read_record_text(rid):
@@ -190,12 +226,13 @@ def read_record_text(rid):
     txt = (request.get_json(silent=True) or {}).get("text")
     if not isinstance(txt, str) or not txt.strip() or len(txt) > 30000:
         return error("No readable text was sent")
-    meds = text_match.find_medicines(txt, _brand_index())
+    manual = bool((request.get_json(silent=True) or {}).get("manual"))   # typed by the user: keep every name
+    meds = (text_match.parse_manual if manual else text_match.find_medicines)(txt, _brand_index())
     for m in meds:
-        m["match"] = _catalog_match(m["name"])
+        m["match"] = _catalog_match(m["name"]) or (_generic_match(m["name"]) if manual else None)
     if meds:
         r.extracted = {"status": "ok", "message": "", "doctor": None, "date": None, "diagnosis": None,
-                       "medicines": meds, "imported": False, "engine": "browser-ocr"}
+                       "medicines": meds, "imported": False, "engine": "manual" if manual else "browser-ocr"}
     else:
         r.extracted = {"status": "error", "engine": "browser-ocr", "imported": False,
                        "message": "No medicine names from the catalog were recognised in this photo. Use a clearer, "
@@ -265,6 +302,8 @@ def download_record(rid):
     r = owned(Record, rid)
     if r.file_data:
         return send_file(io.BytesIO(r.file_data), as_attachment=True, download_name=r.original_name or "record")
+    if not r.stored_name:
+        return error("This record has no file (it was typed in manually)", 404)
     return send_from_directory(current_app.config["UPLOAD_FOLDER"], r.stored_name,
                                as_attachment=True, download_name=r.original_name)
 
