@@ -3,7 +3,7 @@
 Usage:  DATABASE_URL=postgresql://user:pass@host/db python scripts/migrate_to_hosted_db.py [source.db]
 """
 import os, sys
-from sqlalchemy import create_engine, MetaData, inspect
+from sqlalchemy import create_engine, MetaData
 
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 src_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "api", "medisafe.db")
@@ -19,15 +19,17 @@ src = create_engine(f"sqlite:///{src_path}")
 dst = create_engine(url)
 md = MetaData()
 md.reflect(bind=src)
-md.create_all(dst)
-existing = inspect(dst)
+sys.path.insert(0, os.path.join(root, "backend"))
+from app.models import db  # create the schema from the app's own models (portable types)
+db.metadata.create_all(dst)
 with src.connect() as s, dst.begin() as d:
     for t in md.sorted_tables:
-        if d.execute(t.select().limit(1)).first():
+        dt = db.metadata.tables[t.name]
+        if d.execute(dt.select().limit(1)).first():
             print(f"skip {t.name} (already has data)"); continue
         rows = [dict(r._mapping) for r in s.execute(t.select())]
         for i in range(0, len(rows), 2000):
-            d.execute(t.insert(), rows[i:i + 2000])
+            d.execute(dt.insert(), rows[i:i + 2000])
         print(f"{t.name}: {len(rows)} rows")
     if dst.dialect.name == "postgresql":  # fix id sequences after explicit-id inserts
         for t in md.sorted_tables:
