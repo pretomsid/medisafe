@@ -58,13 +58,24 @@ def available():
 
 
 def extract(data: bytes, ext: str) -> dict:
-    """Returns {"status": "ok"|"unavailable"|"error"|"not_prescription", "message": str, ...fields}."""
-    if not available():
+    """Returns {"status": "ok"|"unavailable"|"error"|"not_prescription", "message": str, ...fields}.
+    Tries every configured engine in order, so one failing key does not block the other."""
+    ext = ext.lower()
+    engines = []
+    if os.environ.get("GEMINI_API_KEY"):
+        engines.append(("Gemini", _gemini))
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        engines.append(("Claude", _claude))
+    if not engines:
         return {"status": "unavailable",
                 "message": "No server-side reader is configured. The photo can be read free in your browser instead."}
-    if os.environ.get("GEMINI_API_KEY"):
-        return _gemini(data, ext.lower())
-    return _claude(data, ext.lower())
+    reasons = []
+    for name, fn in engines:
+        res = fn(data, ext)
+        if res["status"] != "error":
+            return res
+        reasons.append(f"{name}: {res['message']}")
+    return {"status": "error", "message": "; ".join(reasons)}
 
 
 def _finish(out):
@@ -87,16 +98,28 @@ def _gemini(data, ext):
     body = {"contents": [{"parts": [{"inline_data": {"mime_type": mime, "data": base64.standard_b64encode(data).decode()}},
                                     {"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0}}
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-    try:
-        r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                          headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"], "Content-Type": "application/json"},
-                          json=body, timeout=45)
-        r.raise_for_status()
-        out = json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
-    except Exception:
-        return {"status": "error", "message": "Could not read this file automatically right now."}
-    return _finish(out)
+    models = [m for m in (os.environ.get("GEMINI_MODEL"), "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash") if m]
+    why = "no response"
+    for model in dict.fromkeys(models):
+        try:
+            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                              headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"], "Content-Type": "application/json"},
+                              json=body, timeout=40)
+            if r.status_code != 200:
+                msg = ""
+                try:
+                    msg = r.json().get("error", {}).get("message", "")
+                except Exception:
+                    pass
+                why = f"HTTP {r.status_code} ({model}) {msg[:120]}".strip()
+                if r.status_code in (400, 401, 403, 429):   # bad key / quota / bad request: another model will not help
+                    break
+                continue                                     # 404 etc: this model name is gone, try the next one
+            out = json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
+            return _finish(out)
+        except Exception as e:
+            why = f"{type(e).__name__} ({model})"
+    return {"status": "error", "message": f"Could not read this file automatically. {why}"}
 
 
 def _claude(data, ext):
@@ -122,6 +145,6 @@ def _claude(data, ext):
             return {"status": "error", "message": "The document could not be processed automatically."}
         raw = next((b.text for b in resp.content if b.type == "text"), "")
         out = json.loads(raw)
-    except Exception:
-        return {"status": "error", "message": "Could not read this file automatically right now."}
+    except Exception as e:
+        return {"status": "error", "message": f"Could not read this file automatically. {type(e).__name__}"}
     return _finish(out)
