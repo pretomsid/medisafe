@@ -24,6 +24,8 @@ def create_app(config=Config):
         from sqlalchemy import event
         @event.listens_for(db.engine, "connect")
         def set_sqlite_pragma(dbapi_connection, connection_record):
+            if "sqlite" not in db.engine.dialect.name:
+                return
             try:
                 cursor = dbapi_connection.cursor()
                 cursor.execute("PRAGMA journal_mode=WAL")
