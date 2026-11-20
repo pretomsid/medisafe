@@ -2,7 +2,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 [![Framework](https://img.shields.io/badge/framework-Flask%20%7C%20SQLAlchemy-red.svg)](https://flask.palletsprojects.com/)
-[![Database](https://img.shields.io/badge/database-SQLite3%20(WAL%20Mode)-green.svg)](https://www.sqlite.org/)
+[![Database](https://img.shields.io/badge/database-SQLite%20(local)%20%7C%20Postgres%20(Vercel)-green.svg)](https://neon.tech/)
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fpretomsid%2Fmedisafe&project-name=medisafe)
 [![License](https://img.shields.io/badge/license-Academic%20%2F%20Research-lightgrey.svg)](#license)
 
@@ -24,6 +24,7 @@ MediSafe uniquely bridges local, offline machine learning models with live, auth
 - [Directory Layout](#directory-layout)
 - [Installation & Quick Start](#installation--quick-start)
 - [Database & Seed Data](#database--seed-data)
+- [Deploying to Vercel](#deploying-to-vercel)
 - [Testing & Quality Assurance](#testing--quality-assurance)
 - [API Reference](#api-reference)
 - [Security & Clinical Decision Disclaimer](#security--clinical-decision-disclaimer)
@@ -154,6 +155,12 @@ medisafe/
 │       ├── app.js                 # SPA Navigation, State Management & Event Handlers
 │       ├── auth.js                # Authentication Validation & Cookie Handling
 │       └── mock-data.js           # Development Reference Fixtures
+├── api/                           # Vercel Serverless Entrypoint (Flask app + bundled demo DB)
+│   ├── index.py                   # Builds the app with Vercel config, /api/health
+│   ├── medisafe.db                # Seed DB (catalog + demo account only)
+│   └── requirements.txt           # Serverless dependencies (incl. psycopg2)
+├── scripts/
+│   └── migrate_to_hosted_db.py    # Copies the seed DB into Postgres (Neon)
 ├── backend/                       # Primary Backend Web Service
 │   ├── app/
 │   │   ├── __init__.py            # Flask App Factory & Route Registration
@@ -190,7 +197,7 @@ medisafe/
 │   ├── model2_alternative_medicine.ipynb # Price Distribution & Unit Standardization EDA
 │   ├── price_units.py             # Packaging Normalization Logic
 │   └── train.py                   # Alternative Match Precomputation Pipeline
-├── docs/                          # Architectural Design Documentation
+├── docs/                          # Design docs and the 180-second video script
 └── backup_pre_fastapi_migration/  # Safe Historical Rollback Snapshots & Logs
 ```
 
@@ -241,7 +248,7 @@ The database (`backend/instance/medisafe.db`) comes pre-seeded with:
 - **21,712** commercial pharmaceutical products.
 - **1,711** generic drug monographs.
 - **50,357** known clinical drug-drug interactions.
-- Pre-configured demo users and clinical medical histories.
+- A demo account (`demo@medisafe.test`) with a sample medical history.
 
 To rebuild or re-import the database from raw CSV sources:
 ```bash
@@ -254,6 +261,24 @@ To test external medical API connectivity from the terminal:
 cd backend
 .venv/bin/flask --app run check-live-apis
 ```
+
+---
+
+## Deploying to Vercel
+
+The live site runs as a single Vercel project (repo root) with the Flask app served from `api/index.py` (`pyproject.toml` sets `entrypoint = "api.index:app"`). Only one Vercel project should be connected to this repository; `backend/`, `model1/` and `model2/` are bundled into that one function and must not be deployed separately.
+
+**Persistent storage is required.** Vercel serverless instances only have a temporary `/tmp`, so a SQLite file there is lost on cold starts and is not shared between instances. New accounts would then disappear. Use a hosted Postgres database (for example Neon):
+
+1. In the Vercel project, add a Postgres database (Storage tab). This sets `DATABASE_URL` / `POSTGRES_URL`.
+2. Add a long random `SECRET_KEY` environment variable (same value on every instance, otherwise session cookies are rejected).
+3. Load the seed data once:
+   ```bash
+   DATABASE_URL="postgresql://..." python scripts/migrate_to_hosted_db.py
+   ```
+4. Redeploy, then open `/api/health`. It should report `"persistent_storage": true`.
+
+Without `DATABASE_URL` the app falls back to ephemeral SQLite (demo account works, new accounts are not durable) and `/api/health` says so. Uploaded record files are also stored in `/tmp` on Vercel, so downloads are not guaranteed to survive; use object storage for durable files.
 
 ---
 
