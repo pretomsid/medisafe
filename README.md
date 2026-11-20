@@ -72,7 +72,7 @@ flowchart TD
     end
 
     subgraph DataTier["Data & Persistence Tier"]
-        DB[(SQLite Database\nWAL Mode Enabled)]
+        DB[(Neon Postgres on Vercel\nSQLite WAL for local dev)]
         Uploads["Secure File Storage\n(Magic-Byte Verified Documents)"]
     end
 
@@ -176,7 +176,7 @@ medisafe/
 │   │       ├── live_api.py        # DDInter 2.0, OpenFDA & RxNav API Adapters
 │   │       └── model2_adapter.py  # Model 2 Alternative Medicine Ranker
 │   ├── instance/
-│   │   └── medisafe.db            # Production SQLite Database (WAL Mode Enabled)
+│   │   └── medisafe.db            # Local development SQLite Database (WAL Mode Enabled)
 │   ├── tests/
 │   │   └── test_api.py            # Automated Pytest Suite (17 Unit & Security Tests)
 │   ├── README.md                  # Backend Technical Documentation
@@ -207,7 +207,7 @@ medisafe/
 
 ### Prerequisites
 - Python 3.10, 3.11, or 3.12
-- SQLite 3.35+ (standard with modern Python builds)
+- SQLite 3.35+ (standard with modern Python builds) for local development; Neon Postgres is used for the Vercel deployment
 
 ### 1. Clone the Repository
 ```bash
@@ -268,7 +268,7 @@ cd backend
 
 The live site runs as a single Vercel project (repo root) with the Flask app served from `api/index.py` (`pyproject.toml` sets `entrypoint = "api.index:app"`). Only one Vercel project should be connected to this repository; `backend/`, `model1/` and `model2/` are bundled into that one function and must not be deployed separately.
 
-**Persistent storage is required.** Vercel serverless instances only have a temporary `/tmp`, so a SQLite file there is lost on cold starts and is not shared between instances. New accounts would then disappear. Use a hosted Postgres database (for example Neon):
+**Persistent storage is required.** Vercel serverless instances only have a temporary `/tmp`, so a SQLite file there is lost on cold starts and is not shared between instances. New accounts would then disappear. The live deployment uses **Neon Postgres** (serverless Postgres, connected through Vercel's Storage tab):
 
 1. In the Vercel project, add a Postgres database (Storage tab). This sets `DATABASE_URL` / `POSTGRES_URL`.
 2. Add a long random `SECRET_KEY` environment variable (same value on every instance, otherwise session cookies are rejected).
