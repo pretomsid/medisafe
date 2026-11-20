@@ -1,0 +1,15 @@
+[project]
+name = "medisafe"
+version = "1.0.0"
+description = "MediSafe Clinical Decision Support System"
+requires-python = ">=3.10"
+dependencies = [
+    "flask>=3.0.0",
+    "flask-sqlalchemy>=3.1.0",
+    "werkzeug>=3.0.0",
+    "requests>=2.28.0",
+    "urllib3>=2.0.0"
+]
+
+[tool.vercel]
+entrypoint = "api.index:app"
