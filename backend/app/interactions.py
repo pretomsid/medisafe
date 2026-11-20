@@ -18,7 +18,7 @@ from flask import Blueprint, g, jsonify, request
 from . import safety
 from .ai import live_api
 from .auth import error, login_required
-from .models import Generic, KnownInteraction, Notification, Product, db, log
+from .models import Generic, KnownInteraction, Medication, Notification, Product, db, log
 
 bp = Blueprint("interactions", __name__, url_prefix="/api/interactions")
 
@@ -247,3 +247,50 @@ def screen_medication(user, med, others):
         if not exists:
             db.session.add(Notification(user_id=user.id, type="Interaction", title=f["title"][:200], text=f["text"]))
     return found
+
+
+# ---------- Safety report: সব current ওষুধ (নিজে দেওয়া + prescription থেকে) একসাথে বিশ্লেষণ ----------
+@bp.post("/report")
+@login_required
+def report():
+    """রোগীর সব current ওষুধ + (ঐচ্ছিক) prescription-এর নতুন ওষুধ: প্রতিটা জোড়ার interaction, duplicate আর
+    allergy/condition ঝুঁকি। "extra" = এখনো list-এ যোগ না হওয়া ওষুধ (prescription review-এর সময়)।"""
+    d = request.get_json(silent=True) or {}
+    extra = d.get("extra") or []
+    if not isinstance(extra, list) or len(extra) > 30:
+        return error("extra must be a list of at most 30 medicines")
+    entries, seen = [], set()
+    for m in Medication.query.filter_by(user_id=g.user.id, status="Current"):
+        it = as_item(m)
+        key = (m.name or "").strip().lower()
+        if key not in seen:
+            seen.add(key)
+            entries.append((it, m.name, "current"))
+    for x in extra:
+        if not isinstance(x, dict):
+            continue
+        name = str(x.get("name") or "").strip()[:120]
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        entries.append((as_item(SimpleNamespace(name=name, ingredient=str(x.get("ingredient") or "")[:120])),
+                        name, "prescription"))
+    checked = [(it, n, src) for it, n, src in entries if it]
+    unmatched = [n for it, n, _ in entries if not it]
+    truncated = len(checked) > MAX_ITEMS
+    checked = checked[:MAX_ITEMS]
+    pairs = []
+    for i in range(len(checked)):
+        for j in range(i + 1, len(checked)):
+            r = check_pair(checked[i][0], checked[j][0])
+            r["a_source"], r["b_source"] = checked[i][2], checked[j][2]
+            pairs.append(r)
+    warnings = safety.screen(g.user, [(it.brand, ingredients(it)) for it, _, _ in checked])
+    counts = {k: sum(1 for p in pairs if p["category"] == k)
+              for k in ("high", "moderate", "low", "duplicate", "documented", "unknown")}
+    level = ("high" if counts["high"] or counts["duplicate"] else "moderate" if counts["moderate"] or warnings
+             else "low" if counts["low"] or counts["documented"] else "none")
+    return jsonify(connected=_predictor is not None, medicines=[{"name": n, "source": src} for _, n, src in checked],
+                   unmatched=unmatched, truncated=truncated, pairs=pairs, safety=warnings, counts=counts,
+                   level=level, live_apis=live_api.get_live_apis_status())

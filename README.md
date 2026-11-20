@@ -138,6 +138,8 @@ Uploading a **Prescription** now does real work instead of just storing a file:
 3. You review the result on a confirmation screen, edit or untick anything that was misread, then add the selected medicines to **My Medications** in one click.
 4. Added medicines go through the same allergy, condition and drug-interaction screening as manually added ones. Medicines you already take are skipped, never duplicated.
 
+The review screen also runs a **live safety analysis** while you edit it: the prescription medicines are checked against each other, your current medicines, your allergies and your conditions, before anything is added. The same analysis for everything you currently take is on the new **Safety Report** page (`POST /api/interactions/report`).
+
 The AI only suggests; nothing is added without your confirmation. Set `ANTHROPIC_API_KEY` (in `backend/.env` locally, or Vercel Environment Variables) to enable it. Without the key everything else works and prescriptions are simply stored. The model can be changed with `PRESCRIPTION_MODEL`. Uploaded files are now also stored in the database, so downloads keep working on serverless hosts.
 
 ---

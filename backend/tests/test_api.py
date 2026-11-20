@@ -287,3 +287,17 @@ def test_import_requires_items_and_ownership(client):
     rid = _upload_rx(client).get_json()["id"]
     assert client.post(f"/api/records/{rid}/import-meds", json={"items": []}).status_code == 400
     assert client.post("/api/records/999/import-meds", json={"items": [{"name": "x"}]}).status_code == 404
+
+
+def test_safety_report_combines_current_and_prescription_meds(client):
+    register(client)
+    client.post("/api/meds", json={"name": "Alpha", "ingredient": "Paracetamol", "strength": "500 mg", "dose": "1",
+                                   "freq": "daily"})
+    r = client.post("/api/interactions/report", json={"extra": [{"name": "Beta"}, {"name": "Alpha"}, {"name": "Nope"}]})
+    assert r.status_code == 200
+    d = r.get_json()
+    srcs = {m["name"]: m["source"] for m in d["medicines"]}
+    assert srcs == {"Alpha": "current", "Beta": "prescription"}      # Alpha not double counted
+    assert d["unmatched"] == ["Nope"]
+    assert d["pairs"][0]["category"] == "duplicate" and d["level"] == "high"  # two paracetamol brands
+    assert client.post("/api/interactions/report", json={"extra": "x"}).status_code == 400
