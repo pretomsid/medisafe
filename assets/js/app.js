@@ -131,8 +131,9 @@ const rxBadge=r=>{if(r.cat!='Prescription'||!r.extracted)return '';const x=r.ext
 const rxBtn=r=>r.cat!='Prescription'?'':`<button class="btn btn-sm btn-primary me-2" data-act="rx-review" data-id="${r.id}"><i class="bi bi-capsule"></i> ${r.extracted&&r.extracted.status=='ok'?(r.extracted.imported?'View medicines':'Review & add'):'Read prescription'}</button>`;
 function reviewRx(id){const r=S.records.find(x=>x.id==id);if(!r)return;const x=r.extracted||{};
  if(x.status!='ok'){const np=x.status=='not_prescription';
-  modal('Prescription',`<div class="alert alert-${np?'secondary':'warning'} mb-2">${esc(x.message||'This prescription has not been read yet.')}</div><div id="ocr-msg" class="small text-muted">${np?'':'Free option: read the photo in your browser (private, no key needed, works best on clear printed prescriptions). Or add the medicines yourself under My Medications.'}</div>`,
-   np?null:async()=>{try{await freeReadRecord(id,m=>{const e=$('#ocr-msg');if(e)e.textContent='Reading photo… '+m})}catch(err){toast(err.message,'danger');return false}setTimeout(()=>reviewRx(id),450)},'Read free in my browser');return}
+  modal('Prescription',`<div class="alert alert-${np?'secondary':'warning'} mb-2">${esc(x.message||'This prescription has not been read yet.')}</div>${np?'':`<div id="ocr-msg" class="small text-muted mb-2">Free reader: works on clear <b>printed</b> prescriptions (photo). Handwriting and PDFs usually cannot be read automatically, so type the medicine names below instead.</div>
+   <label class="form-label small mb-1">Medicine names (one per line, edit anything the reader got wrong)</label><textarea id="rx-txt" class="form-control" rows="5" placeholder="Napa 500 mg 1+1+1&#10;Seclo 20 mg 0+0+1">${esc(LAST[id]||'')}</textarea><div class="small text-muted mt-1">Leave it empty and press the button to read the photo again. With names typed, MediSafe matches them to the catalog and runs the safety check.</div>`}`,
+   np?null:async()=>{const t=($('#rx-txt')||{value:''}).value.trim();try{if(t){const rec=await API.readText(id,t);Object.assign(r,rec)}else await freeReadRecord(id,m=>{const e=$('#ocr-msg');if(e)e.textContent='Reading photo… '+m})}catch(err){toast(err.message,'danger');return false}go();setTimeout(()=>reviewRx(id),450)},'Read / check medicines');return}
  const meds=rxMeds(r),inp=(n,v,i)=>`<input class="form-control form-control-sm" data-f="${n}" data-i="${i}" value="${esc(v||'')}">`;
  modal('Review prescription',`<form id="m-form" novalidate>
  <div class="alert alert-warning small"><b>Check every line against your prescription.</b> Handwriting can be misread. Only the medicines you tick are added, and MediSafe then checks them against your allergies, conditions and current medicines.</div>
@@ -167,14 +168,14 @@ async function loadReport(el,extra=[],compact=false,live=false){if(!el)return;el
 
 
 /* Free prescription reading: OCR runs in the browser (Tesseract.js); only the recognised text goes to the server */
-let tessP;const loadTess=()=>tessP||(tessP=new Promise((ok,no)=>{if(window.Tesseract)return ok();const t=document.createElement('script');t.src='https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js';t.onload=ok;t.onerror=()=>{tessP=null;no(new Error('Could not load the free reader. Check your internet connection.'))};document.head.append(t)}));
+const LAST={};let tessP;const loadTess=()=>tessP||(tessP=new Promise((ok,no)=>{if(window.Tesseract)return ok();const t=document.createElement('script');t.src='https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js';t.onload=ok;t.onerror=()=>{tessP=null;no(new Error('Could not load the free reader. Check your internet connection.'))};document.head.append(t)}));
 async function freeRead(id,blob,say){if(!/^image\//.test(blob.type))throw new Error('PDF files cannot be read for free. Upload a JPG or PNG photo of the prescription, or add the medicines manually.');
  say&&say('loading reader…');await loadTess();
  const {data}=await Tesseract.recognize(blob,'eng',{logger:m=>{if(say&&m.status)say(m.status+(m.progress?' '+Math.round(m.progress*100)+'%':''))}});
- const rec=await API.readText(id,data.text||'');const r=S.records.find(x=>x.id==id);if(r)Object.assign(r,rec);return rec}
+ LAST[id]=data.text||'';const rec=await API.readText(id,data.text||'');const r=S.records.find(x=>x.id==id);if(r)Object.assign(r,rec);return rec}
 async function freeReadRecord(id,say){const res=await fetch(API.recordFileUrl(id),{credentials:'include'});if(!res.ok)throw new Error('The stored file is no longer available. Please upload it again.');return freeRead(id,await res.blob(),say)}
 async function autoFree(id,file){modal('Reading prescription','<div class="text-center py-3"><div class="spinner-border text-primary"></div><div id="ocr-msg" class="small text-muted mt-2">Reading the photo in your browser (free and private)…</div></div>',null);
- try{await freeRead(id,file,m=>{const e=$('#ocr-msg');if(e)e.textContent='Reading photo… '+m})}catch(err){const e=$('#ocr-msg');if(e)e.textContent=err.message;go();return}
+ try{await freeRead(id,file,m=>{const e=$('#ocr-msg');if(e)e.textContent='Reading photo… '+m})}catch(err){toast(err.message,'danger');go();setTimeout(()=>reviewRx(id),400);return}
  go();reviewRx(id)}
 
 /* Safety Report: manual input (type medicines to check, not saved) next to the automatic check of everything you take */
