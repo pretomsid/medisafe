@@ -9,6 +9,7 @@ The result is only a *suggestion*: the user reviews it before anything is added 
 import base64
 import json
 import os
+import time
 
 MODEL = os.environ.get("PRESCRIPTION_MODEL", "claude-opus-5-5")
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # Claude limit per image
@@ -100,25 +101,43 @@ def _gemini(data, ext):
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0}}
     key = os.environ["GEMINI_API_KEY"]
     errors = []
+    deadline = time.time() + 75                   # whole attempt must finish well inside the serverless limit
     for model in _gemini_models(requests, key):
-        try:
-            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                              headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json=body, timeout=35)
-            if r.status_code != 200:
-                msg = ""
+        # "thinking" makes newer models take a minute for a task that needs none: switch it off (some models reject
+        # the setting with a 400, then we ask again without it).
+        for think in (True, False):
+            left = deadline - time.time()
+            if left < 8:
+                break
+            cfg = dict(body["generationConfig"])
+            if think:
+                cfg["thinkingConfig"] = {"thinkingBudget": 0}
+            try:
+                r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                                  headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                                  json={**body, "generationConfig": cfg}, timeout=min(40, left))
+            except Exception as e:
+                errors.append(f"{model}: {type(e).__name__}")
+                break                               # timeout / network: next model, do not repeat
+            if r.status_code == 200:
                 try:
-                    msg = r.json().get("error", {}).get("message", "")
+                    out = json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
                 except Exception:
-                    pass
-                errors.append(f"{model}: HTTP {r.status_code} {msg[:90]}".strip())
-                if r.status_code in (401, 403, 429):   # bad key / no access / quota: another model will not help
+                    errors.append(f"{model}: unreadable reply")
                     break
-                continue                                # 400/404/5xx: try the next model
-            out = json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
-            _GEMINI_OK["model"] = model                 # remember what worked for this process
-            return _finish(out)
-        except Exception as e:
-            errors.append(f"{model}: {type(e).__name__}")
+                _GEMINI_OK["model"] = model         # remember what worked for this process
+                return _finish(out)
+            msg = ""
+            try:
+                msg = r.json().get("error", {}).get("message", "")
+            except Exception:
+                pass
+            errors.append(f"{model}: HTTP {r.status_code} {msg[:90]}".strip())
+            if r.status_code in (401, 403, 429):
+                return {"status": "error", "message": "Could not read this file automatically. " + " | ".join(errors[-3:])}
+            if r.status_code == 400 and think:
+                continue                            # retry this model without the thinking setting
+            break                                   # 404/5xx: try the next model
     return {"status": "error", "message": "Could not read this file automatically. " + " | ".join(errors[-3:])}
 
 
