@@ -12,4 +12,4 @@ dependencies = [
 ]
 
 [tool.vercel]
-entrypoint = "api.index:app"
+entrypoint = "api/index.py"

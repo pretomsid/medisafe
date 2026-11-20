@@ -13,6 +13,7 @@ for p in [ROOT_DIR, BACKEND_DIR]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from flask import Flask
 from app import create_app
 from app.config import Config
 
@@ -60,4 +61,4 @@ class VercelConfig(Config):
     SESSION_COOKIE_SAMESITE = "Lax"
 
 # Top-level Flask instance required by Vercel static analyzer
-app = create_app(VercelConfig)
+app: Flask = create_app(VercelConfig)
