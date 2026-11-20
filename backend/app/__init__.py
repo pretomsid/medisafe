@@ -32,7 +32,10 @@ def create_app(config=Config):
             except Exception:
                 pass
 
-        db.create_all()
+        try:
+            db.create_all()
+        except Exception:
+            pass
         # Model 1 (interaction risk) JSON থাকলে তবেই লাগানো হয়, তাই "connected" সবসময় সত্যি কথা বলে
         from .ai import interaction_adapter
         interactions.set_predictor(interaction_adapter.predict if interaction_adapter.available() else None)

@@ -10,14 +10,24 @@ def _secret_key():
     if os.environ.get("SECRET_KEY"):
         return os.environ["SECRET_KEY"]
     path = os.path.join(BASE_DIR, "instance", "secret_key")
-    if not os.path.exists(path):
-        import secrets
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(secrets.token_hex(32))
-    with open(path) as f:
-        return f.read().strip()
+    try:
+        if os.path.exists(path):
+            with open(path) as f:
+                return f.read().strip()
+    except Exception:
+        pass
+
+    import secrets
+    key = secrets.token_hex(32)
+    for p in [path, os.path.join("/tmp", "secret_key")]:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(key)
+            return key
+        except Exception:
+            continue
+    return key
 
 
 class Config:

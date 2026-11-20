@@ -1,43 +1,21 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "api/index.py",
-      "use": "@vercel/python"
-    },
-    {
-      "src": "assets/**",
-      "use": "@vercel/static"
-    },
-    {
-      "src": "*.html",
-      "use": "@vercel/static"
+  "functions": {
+    "api/index.py": {
+      "includeFiles": "api/**,backend/**,model1/models/**,model2/models/**"
     }
-  ],
-  "routes": [
+  },
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "api/index.py"
+      "source": "/api/(.*)",
+      "destination": "/api/index.py"
     },
     {
-      "src": "/assets/(.*)",
-      "dest": "/assets/$1"
+      "source": "/app",
+      "destination": "/app.html"
     },
     {
-      "src": "/favicon.ico",
-      "dest": "/assets/favicon.ico"
-    },
-    {
-      "src": "/(app|auth|index)(\\.html)?",
-      "dest": "/$1.html"
-    },
-    {
-      "src": "/",
-      "dest": "/index.html"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/$1"
+      "source": "/auth",
+      "destination": "/auth.html"
     }
   ]
 }
