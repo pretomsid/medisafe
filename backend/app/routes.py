@@ -1,14 +1,16 @@
 """Patient data API: profile, records, medications, catalog, notifications, activity।
 প্রতিটা query-তে user_id দিয়ে filter করা হয়, তাই কেউ অন্যের data দেখতে পারে না।"""
+import io
 import os
 import uuid
 from datetime import date
 
-from flask import Blueprint, current_app, g, jsonify, request, send_from_directory
+from flask import Blueprint, current_app, g, jsonify, request, send_file, send_from_directory
 
 from . import interactions
 from .auth import error, login_required, phone_problem
 from .ai import interaction_adapter, live_api
+from .ai import prescription_extract
 from .ai import model2_adapter as model2
 from .models import Activity, Generic, Medication, Notification, Product, Record, db, log
 
@@ -129,21 +131,103 @@ def upload_record():
     f.stream.seek(0)
     if not any(head.startswith(m) for m in MAGIC[ext]):
         return error("The file content does not match its type (PDF, JPG or PNG)")
+    data = f.stream.read()
     stored = f"{uuid.uuid4().hex}.{ext}"
-    os.makedirs(current_app.config["UPLOAD_FOLDER"], exist_ok=True)
-    f.save(os.path.join(current_app.config["UPLOAD_FOLDER"], stored))
-    r = Record(user_id=g.user.id, title=title, category=cat,
+    try:  # disk copy is best-effort; the DB copy below is what survives on serverless hosts
+        os.makedirs(current_app.config["UPLOAD_FOLDER"], exist_ok=True)
+        with open(os.path.join(current_app.config["UPLOAD_FOLDER"], stored), "wb") as out:
+            out.write(data)
+    except OSError:
+        pass
+    r = Record(user_id=g.user.id, title=title, category=cat, file_data=data,
                record_date=rdate or None, original_name=f.filename[:255], stored_name=stored)
+    if cat == "Prescription":
+        r.extracted = _read_prescription(data, ext)
     db.session.add(r)
     log(g.user.id, f"Uploaded {title}")
     db.session.commit()
     return jsonify(r.to_dict()), 201
 
 
+def _read_prescription(data, ext):
+    """Run the AI reader and match each medicine to the catalog (so ingredient/strength can be filled in)."""
+    res = prescription_extract.extract(data, ext)
+    for m in res.get("medicines", []):
+        m["match"] = _catalog_match(m.get("name"))
+    res["imported"] = False
+    return res
+
+
+def _catalog_match(name):
+    n = (name or "").strip()
+    if len(n) < 2:
+        return None
+    p = (Product.query.filter(db.func.lower(Product.brand) == n.lower()).first()
+         or Product.query.filter(Product.brand.ilike(n + "%")).order_by(db.func.length(Product.brand)).first())
+    return {"id": p.id, "brand": p.brand, "generic": p.generic, "strength": p.strength} if p else None
+
+
+@bp.post("/records/<int:rid>/extract")
+@login_required
+def extract_record(rid):
+    """Read (or re-read) a stored prescription."""
+    r = owned(Record, rid)
+    if r.category != "Prescription":
+        return error("Only prescriptions can be read automatically")
+    data = r.file_data
+    if not data and r.stored_name:
+        path = os.path.join(current_app.config["UPLOAD_FOLDER"], r.stored_name)
+        if os.path.exists(path):
+            with open(path, "rb") as fh:
+                data = fh.read()
+    if not data:
+        return error("The stored file is no longer available. Please upload it again.", 404)
+    r.extracted = _read_prescription(data, (r.stored_name or "x.jpg").rsplit(".", 1)[-1])
+    db.session.commit()
+    return jsonify(r.to_dict())
+
+
+@bp.post("/records/<int:rid>/import-meds")
+@login_required
+def import_record_meds(rid):
+    """Add the medicines the user confirmed from a prescription to their medication list (with safety screening)."""
+    r = owned(Record, rid)
+    items = (request.get_json(silent=True) or {}).get("items")
+    if not isinstance(items, list) or not items or len(items) > 30:
+        return error("Select 1-30 medicines to add")
+    existing = {(m.name or "").lower() for m in Medication.query.filter_by(user_id=g.user.id, status="Current")}
+    added, skipped, warnings = [], [], []
+    for d in items:
+        if not isinstance(d, dict):
+            return error("Invalid medicine entry")
+        m = Medication(user_id=g.user.id)
+        payload = {"name": d.get("name"), "ingredient": d.get("ingredient"), "strength": d.get("strength"),
+                   "dose": d.get("dose"), "freq": d.get("freq"), "start": r.record_date or "", "status": "Current"}
+        payload = {k: (v if v is not None else "") for k, v in payload.items()}
+        if (payload["name"] or "").strip().lower() in existing:
+            skipped.append(payload["name"])
+            continue
+        if msg := _apply_med(m, payload):
+            db.session.rollback()
+            return error(f"{payload['name'] or 'Medicine'}: {msg}")
+        db.session.add(m)
+        db.session.flush()
+        log(g.user.id, f"Added medication from prescription: {m.name}")
+        warnings += _screen(m)
+        existing.add(m.name.lower())
+        added.append(m)
+    if added and r.extracted:
+        r.extracted = {**r.extracted, "imported": True}
+    db.session.commit()
+    return jsonify(added=[m.to_dict() for m in added], skipped=skipped, warnings=warnings)
+
+
 @bp.get("/records/<int:rid>/file")
 @login_required
 def download_record(rid):
     r = owned(Record, rid)
+    if r.file_data:
+        return send_file(io.BytesIO(r.file_data), as_attachment=True, download_name=r.original_name or "record")
     return send_from_directory(current_app.config["UPLOAD_FOLDER"], r.stored_name,
                                as_attachment=True, download_name=r.original_name)
 

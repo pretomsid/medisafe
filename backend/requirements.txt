@@ -7,3 +7,4 @@ pydantic>=2.0.0
 pytest
 # MySQL-এ যেতে চাইলে নিচের লাইন চালু করে .env-এ DATABASE_URL বদলান
 # pymysql
+anthropic>=0.50

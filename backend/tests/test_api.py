@@ -237,3 +237,53 @@ def test_login_lockout_after_repeated_failures(client):
         client.post("/api/auth/login", json={"email": "a@test.com", "password": "wrong"})
     r = client.post("/api/auth/login", json={"email": "a@test.com", "password": "secret123"})
     assert r.status_code == 429
+
+
+# ---------- prescription reading ----------
+PDF = b"%PDF-1.4\nfake"
+
+
+def _upload_rx(client, **kw):
+    return client.post("/api/records", data={"title": "Rx", "cat": "Prescription", "date": "2024-05-01",
+                                             "file": (io.BytesIO(PDF), "rx.pdf")},
+                       content_type="multipart/form-data")
+
+
+def test_prescription_without_api_key_is_unavailable_but_saved(client, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    register(client)
+    r = _upload_rx(client)
+    assert r.status_code == 201
+    assert r.get_json()["extracted"]["status"] == "unavailable"
+    rid = r.get_json()["id"]
+    assert client.get(f"/api/records/{rid}/file").data == PDF  # stored in DB, not just /tmp
+
+
+def test_prescription_extraction_and_import(client, monkeypatch):
+    from app.ai import prescription_extract as px
+    fake = {"status": "ok", "message": "", "doctor": "Dr. A", "date": "2024-05-01", "diagnosis": "Fever",
+            "medicines": [
+                {"name": "Alpha", "strength": "500 mg", "dose": "1 tablet", "frequency": "1+0+1", "duration": "5 days",
+                 "uncertain": False},
+                {"name": "Unknownol", "strength": None, "dose": "1", "frequency": "daily", "duration": None,
+                 "uncertain": True}]}
+    monkeypatch.setattr(px, "extract", lambda data, ext: dict(fake, medicines=[dict(m) for m in fake["medicines"]]))
+    register(client)
+    r = _upload_rx(client).get_json()
+    meds = r["extracted"]["medicines"]
+    assert meds[0]["match"]["generic"] == "Paracetamol" and meds[1]["match"] is None
+    out = client.post(f"/api/records/{r['id']}/import-meds", json={"items": [
+        {"name": "Alpha", "ingredient": "Paracetamol", "strength": "500 mg", "dose": "1 tablet", "freq": "1+0+1"},
+        {"name": "Unknownol", "dose": "1", "freq": "daily"}]})
+    assert out.status_code == 200 and len(out.get_json()["added"]) == 2
+    again = client.post(f"/api/records/{r['id']}/import-meds", json={"items": [{"name": "Alpha"}]}).get_json()
+    assert again["added"] == [] and again["skipped"] == ["Alpha"]  # no duplicates
+    assert client.get("/api/records").get_json()[0]["extracted"]["imported"] is True
+    assert len(client.get("/api/meds").get_json()) == 2
+
+
+def test_import_requires_items_and_ownership(client):
+    register(client)
+    rid = _upload_rx(client).get_json()["id"]
+    assert client.post(f"/api/records/{rid}/import-meds", json={"items": []}).status_code == 400
+    assert client.post("/api/records/999/import-meds", json={"items": [{"name": "x"}]}).status_code == 404

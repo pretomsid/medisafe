@@ -51,10 +51,13 @@ class Record(db.Model):
     original_name = db.Column(db.String(255))
     stored_name = db.Column(db.String(64))  # random নাম, আসল নাম দিয়ে disk-এ রাখা হয় না
     note = db.Column(db.String(255), default="")
+    extracted = db.Column(db.JSON)                          # AI-read prescription (suggestion only, user confirms)
+    file_data = db.deferred(db.Column(db.LargeBinary))      # file bytes kept in the DB so it survives serverless /tmp loss
 
     def to_dict(self):
         return {"id": self.id, "title": self.title, "cat": self.category,
-                "date": self.record_date or "", "file": self.original_name or "", "note": self.note or ""}
+                "date": self.record_date or "", "file": self.original_name or "", "note": self.note or "",
+                "extracted": self.extracted}
 
 
 class Medication(db.Model):

@@ -20,6 +20,7 @@ MediSafe uniquely bridges local, offline machine learning models with live, auth
   - [Model 1: Semi-Supervised Drug Interaction Risk Prediction](#model-1-semi-supervised-drug-interaction-risk-prediction)
   - [Model 2: Bioequivalent Alternative Medicine & Price Optimization](#model-2-bioequivalent-alternative-medicine--price-optimization)
   - [Rule-Based Clinical Safety Screening](#rule-based-clinical-safety-screening)
+- [Prescription Reading (AI)](#prescription-reading-ai)
 - [Live Clinical APIs Integration](#live-clinical-apis-integration)
 - [Directory Layout](#directory-layout)
 - [Installation & Quick Start](#installation--quick-start)
@@ -125,6 +126,19 @@ flowchart TD
 - **Therapeutic Duplication:** Evaluates intersection sets of active ingredient keys: $|ia \cap ib| > 0$.
 - **Allergy Screening:** Keyword and class matching (e.g., `penicillin` alert triggers on `Amoxicillin`, `Ampicillin`, and `Penicillin V`).
 - **Condition Screening:** Patient medical history (e.g., *Hypertension*, *Renal impairment*) cross-matched against generic contraindications and clinical precautions.
+
+---
+
+### Prescription Reading (AI)
+
+Uploading a **Prescription** now does real work instead of just storing a file:
+
+1. Claude vision reads the photo or PDF (printed or handwritten) and extracts the doctor, date, diagnosis and every medicine with strength, dose and frequency.
+2. Each medicine is matched against the 21,712-brand catalog to fill in its active ingredient.
+3. You review the result on a confirmation screen, edit or untick anything that was misread, then add the selected medicines to **My Medications** in one click.
+4. Added medicines go through the same allergy, condition and drug-interaction screening as manually added ones. Medicines you already take are skipped, never duplicated.
+
+The AI only suggests; nothing is added without your confirmation. Set `ANTHROPIC_API_KEY` (in `backend/.env` locally, or Vercel Environment Variables) to enable it. Without the key everything else works and prescriptions are simply stored. The model can be changed with `PRESCRIPTION_MODEL`. Uploaded files are now also stored in the database, so downloads keep working on serverless hosts.
 
 ---
 
@@ -271,14 +285,14 @@ The live site runs as a single Vercel project (repo root) with the Flask app ser
 **Persistent storage is required.** Vercel serverless instances only have a temporary `/tmp`, so a SQLite file there is lost on cold starts and is not shared between instances. New accounts would then disappear. The live deployment uses **Neon Postgres** (serverless Postgres, connected through Vercel's Storage tab):
 
 1. In the Vercel project, add a Postgres database (Storage tab). This sets `DATABASE_URL` / `POSTGRES_URL`.
-2. Add a long random `SECRET_KEY` environment variable (same value on every instance, otherwise session cookies are rejected).
+2. Add `ANTHROPIC_API_KEY` to enable prescription reading, and a long random `SECRET_KEY` environment variable (same value on every instance, otherwise session cookies are rejected).
 3. Load the seed data once:
    ```bash
    DATABASE_URL="postgresql://..." python scripts/migrate_to_hosted_db.py
    ```
 4. Redeploy, then open `/api/health`. It should report `"persistent_storage": true`.
 
-Without `DATABASE_URL` the app falls back to ephemeral SQLite (demo account works, new accounts are not durable) and `/api/health` says so. Uploaded record files are also stored in `/tmp` on Vercel, so downloads are not guaranteed to survive; use object storage for durable files.
+Without `DATABASE_URL` the app falls back to ephemeral SQLite (demo account works, new accounts are not durable) and `/api/health` says so. Uploaded record files are stored in the database as well, so they survive serverless restarts (10 MB limit per file).
 
 ---
 

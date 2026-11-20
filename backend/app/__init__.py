@@ -8,6 +8,24 @@ from .config import Config
 from .models import db
 
 
+def _add_missing_columns():
+    """db.create_all() never alters existing tables, so columns added later are created here (idempotent)."""
+    from sqlalchemy import inspect, text
+    try:
+        insp = inspect(db.engine)
+        for table in db.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name not in have:
+                    ddl = col.type.compile(dialect=db.engine.dialect)
+                    with db.engine.begin() as conn:
+                        conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {ddl}'))
+    except Exception:
+        pass
+
+
 def create_app(config=Config):
     app = Flask(__name__)
     app.config.from_object(config)
@@ -38,6 +56,7 @@ def create_app(config=Config):
             db.create_all()
         except Exception:
             pass
+        _add_missing_columns()
         # Model 1 (interaction risk) JSON থাকলে তবেই লাগানো হয়, তাই "connected" সবসময় সত্যি কথা বলে
         from .ai import interaction_adapter
         interactions.set_predictor(interaction_adapter.predict if interaction_adapter.available() else None)
