@@ -1,13 +1,17 @@
-"""Prescription reader: a photo or PDF of a prescription -> structured medicines (Claude vision).
+"""Prescription reader: a photo or PDF of a prescription -> structured medicines.
 
-Needs ANTHROPIC_API_KEY. Without it, extraction is reported as "unavailable" and everything else keeps working.
+Engines, tried in this order (all optional; each needs its own key):
+  1. GEMINI_API_KEY    : Google Gemini vision. Free tier available (aistudio.google.com/apikey, no card needed).
+  2. ANTHROPIC_API_KEY : Claude vision (paid).
+With neither key, extraction is "unavailable" on the server and the browser falls back to free in-browser OCR
+(Tesseract.js) plus catalog matching (text_match.py). Everything else keeps working.
 The result is only a *suggestion*: the user reviews it before anything is added to their medication list."""
 import base64
 import json
 import os
 
 MODEL = os.environ.get("PRESCRIPTION_MODEL", "claude-opus-5-5")
-MAX_IMAGE_BYTES = 5 * 1024 * 1024  # API limit per image
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # Claude limit per image
 
 SYSTEM = """You read photos and PDFs of medical prescriptions (often from Bangladesh, printed or handwritten, English and/or Bangla).
 Extract only what is actually written. Never guess or invent a medicine, dose or date.
@@ -50,15 +54,52 @@ MEDIA = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png"}
 
 
 def available():
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+    return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
 
 
 def extract(data: bytes, ext: str) -> dict:
     """Returns {"status": "ok"|"unavailable"|"error"|"not_prescription", "message": str, ...fields}."""
     if not available():
         return {"status": "unavailable",
-                "message": "Automatic reading is not enabled on this server (no ANTHROPIC_API_KEY). Add medicines manually."}
-    ext = ext.lower()
+                "message": "No server-side reader is configured. The photo can be read free in your browser instead."}
+    if os.environ.get("GEMINI_API_KEY"):
+        return _gemini(data, ext.lower())
+    return _claude(data, ext.lower())
+
+
+def _finish(out):
+    if not out.get("is_prescription"):
+        return {"status": "not_prescription", "message": "This file does not look like a prescription.", "medicines": []}
+    meds = [m for m in out.get("medicines", []) if (m.get("name") or "").strip()][:30]
+    for m in meds:
+        m["uncertain"] = bool(m.get("uncertain"))
+    return {"status": "ok", "message": "", "doctor": out.get("doctor_name"), "date": out.get("prescription_date"),
+            "diagnosis": out.get("diagnosis"), "medicines": meds}
+
+
+def _gemini(data, ext):
+    """Gemini vision over plain REST (no extra SDK). The JSON shape is described in the prompt."""
+    import requests
+    mime = "application/pdf" if ext == "pdf" else MEDIA.get(ext, "image/jpeg")
+    prompt = (SYSTEM + "\n\nReturn ONLY JSON with exactly these keys: is_prescription (bool), doctor_name (string|null), "
+              "prescription_date (string|null), diagnosis (string|null), medicines (array of objects with name, strength, "
+              "dose, frequency, duration (each string|null) and uncertain (bool)).")
+    body = {"contents": [{"parts": [{"inline_data": {"mime_type": mime, "data": base64.standard_b64encode(data).decode()}},
+                                    {"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0}}
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    try:
+        r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                          headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"], "Content-Type": "application/json"},
+                          json=body, timeout=45)
+        r.raise_for_status()
+        out = json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
+    except Exception:
+        return {"status": "error", "message": "Could not read this file automatically right now."}
+    return _finish(out)
+
+
+def _claude(data, ext):
     if ext != "pdf" and len(data) > MAX_IMAGE_BYTES:
         return {"status": "error", "message": "The image is larger than 5 MB, so it could not be read automatically. "
                                               "Upload a smaller photo, or add the medicines manually."}
@@ -82,9 +123,5 @@ def extract(data: bytes, ext: str) -> dict:
         raw = next((b.text for b in resp.content if b.type == "text"), "")
         out = json.loads(raw)
     except Exception:
-        return {"status": "error", "message": "Could not read this file automatically right now. Add the medicines manually."}
-    if not out.get("is_prescription"):
-        return {"status": "not_prescription", "message": "This file does not look like a prescription.", "medicines": []}
-    meds = [m for m in out.get("medicines", []) if (m.get("name") or "").strip()][:30]
-    return {"status": "ok", "message": "", "doctor": out.get("doctor_name"), "date": out.get("prescription_date"),
-            "diagnosis": out.get("diagnosis"), "medicines": meds}
+        return {"status": "error", "message": "Could not read this file automatically right now."}
+    return _finish(out)

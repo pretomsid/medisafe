@@ -301,3 +301,28 @@ def test_safety_report_combines_current_and_prescription_meds(client):
     assert d["unmatched"] == ["Nope"]
     assert d["pairs"][0]["category"] == "duplicate" and d["level"] == "high"  # two paracetamol brands
     assert client.post("/api/interactions/report", json={"extra": "x"}).status_code == 400
+
+
+def test_free_text_reader_matches_catalog(client, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    register(client)
+    rid = _upload_rx(client).get_json()["id"]
+    out = client.post(f"/api/records/{rid}/read-text", json={
+        "text": "Dr. Rahman\nRx\n1. Tab. Alpha 500 mg  1+0+1  for 5 days\n2. Cap Beta 1 capsule twice daily\nWater daily"})
+    d = out.get_json()["extracted"]
+    names = [m["name"] for m in d["medicines"]]
+    assert names == ["Alpha", "Beta"] and d["engine"] == "browser-ocr"
+    assert d["medicines"][0]["strength"] == "500 mg" and d["medicines"][0]["frequency"] == "1+0+1"
+    assert d["medicines"][0]["match"]["generic"] == "Paracetamol"
+    nothing = client.post(f"/api/records/{rid}/read-text", json={"text": "random words only here"}).get_json()
+    assert nothing["extracted"]["status"] == "error"
+    assert client.post(f"/api/records/{rid}/read-text", json={"text": ""}).status_code == 400
+
+
+def test_store_only_mode_skips_reading(client):
+    register(client)
+    r = client.post("/api/records", data={"title": "Rx", "cat": "Prescription", "date": "2024-05-01",
+                                          "mode": "Store only (manual)", "file": (io.BytesIO(PDF), "rx.pdf")},
+                    content_type="multipart/form-data")
+    assert r.status_code == 201 and r.get_json()["extracted"] is None

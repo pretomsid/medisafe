@@ -133,14 +133,22 @@ flowchart TD
 
 Uploading a **Prescription** now does real work instead of just storing a file:
 
-1. Claude vision reads the photo or PDF (printed or handwritten) and extracts the doctor, date, diagnosis and every medicine with strength, dose and frequency.
-2. Each medicine is matched against the 21,712-brand catalog to fill in its active ingredient.
-3. You review the result on a confirmation screen, edit or untick anything that was misread, then add the selected medicines to **My Medications** in one click.
-4. Added medicines go through the same allergy, condition and drug-interaction screening as manually added ones. Medicines you already take are skipped, never duplicated.
+Three ways to get the medicines in, all optional and the first one is completely free:
 
-The review screen also runs a **live safety analysis** while you edit it: the prescription medicines are checked against each other, your current medicines, your allergies and your conditions, before anything is added. The same analysis for everything you currently take is on the new **Safety Report** page (`POST /api/interactions/report`).
+1. **Free, no key (default):** the photo is read **in your browser** with Tesseract.js (OCR), and only the recognised text is sent to the server, which finds medicine names by matching them against the 21,712-brand catalog (`backend/app/ai/text_match.py`). Strength, frequency and duration are picked from the same line. Works well on **printed** prescriptions (JPG/PNG); handwriting and PDFs are not reliable here.
+2. **Free Gemini key (better for handwriting and PDFs):** set `GEMINI_API_KEY` (get one free at aistudio.google.com/apikey, no card). Note that Google's free tier may use submitted content to improve its products, so do not use it with real patient data.
+3. **Claude key (paid):** set `ANTHROPIC_API_KEY` (`PRESCRIPTION_MODEL` to change the model). Used only if no Gemini key is set.
+4. **Manual:** choose "Store only (manual)" when uploading, or add medicines yourself under My Medications.
 
-The AI only suggests; nothing is added without your confirmation. Set `ANTHROPIC_API_KEY` (in `backend/.env` locally, or Vercel Environment Variables) to enable it. Without the key everything else works and prescriptions are simply stored. The model can be changed with `PRESCRIPTION_MODEL`. Uploaded files are now also stored in the database, so downloads keep working on serverless hosts.
+Whatever reads the file, the result is a suggestion:
+
+1. Each medicine is matched against the catalog to fill in its active ingredient.
+2. You review the result on a confirmation screen, edit or untick anything that was misread, then add the selected medicines to **My Medications** in one click.
+3. Added medicines go through the same allergy, condition and drug-interaction screening as manually added ones. Medicines you already take are skipped, never duplicated.
+
+The review screen also runs a **live safety analysis** while you edit it: the prescription medicines are checked against each other, your current medicines, your allergies and your conditions, before anything is added. The same analysis for everything you currently take is on the **Safety Report** page (`POST /api/interactions/report`). It has an automatic part (all your current medicines) and a manual part (type extra medicines to check without saving them). The default check is fast (verified database, monographs, AI model); an optional button adds slower live DDInter/OpenFDA lookups.
+
+The AI only suggests; nothing is added without your confirmation. Uploaded files are now also stored in the database, so downloads keep working on serverless hosts.
 
 ---
 
@@ -287,7 +295,7 @@ The live site runs as a single Vercel project (repo root) with the Flask app ser
 **Persistent storage is required.** Vercel serverless instances only have a temporary `/tmp`, so a SQLite file there is lost on cold starts and is not shared between instances. New accounts would then disappear. The live deployment uses **Neon Postgres** (serverless Postgres, connected through Vercel's Storage tab):
 
 1. In the Vercel project, add a Postgres database (Storage tab). This sets `DATABASE_URL` / `POSTGRES_URL`.
-2. Add `ANTHROPIC_API_KEY` to enable prescription reading, and a long random `SECRET_KEY` environment variable (same value on every instance, otherwise session cookies are rejected).
+2. Add a long random `SECRET_KEY` environment variable (optional: `GEMINI_API_KEY` for server-side prescription reading, see Prescription Reading) (same value on every instance, otherwise session cookies are rejected).
 3. Load the seed data once:
    ```bash
    DATABASE_URL="postgresql://..." python scripts/migrate_to_hosted_db.py

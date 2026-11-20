@@ -11,9 +11,10 @@
 কিছু না পেলে "unknown" — কখনো "safe" বলা হয় না।
 """
 import re
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 
 from . import safety
 from .ai import live_api
@@ -25,6 +26,7 @@ bp = Blueprint("interactions", __name__, url_prefix="/api/interactions")
 _predictor = None
 CONFIDENCE_THRESHOLD = 0.6
 ORDER = ["low", "moderate", "high"]
+LIVE_PAIR_LIMIT = 6  # live online lookups only when asked for, and only up to this many pairs
 MAX_ITEMS = 10  # ১০টা ওষুধ = ৪৫টা জোড়া; এর বেশি হলে request ধীর হয়
 
 
@@ -106,7 +108,7 @@ def documented(ings_a, ings_b):
     return found
 
 
-def check_pair(a, b):
+def check_pair(a, b, live=True):
     ia, ib = ingredients(a), ingredients(b)
     result = {"a": a.brand, "b": b.brand, "category": "unknown", "predicted": None, "verified": [],
               "management": None, "references": []}
@@ -125,6 +127,7 @@ def check_pair(a, b):
         return result
 
     ddinter_live = None
+    # live=False skips the slow external API calls (steps 2 and 5); used for big lists in the safety report
     # 1. KnownInteraction (local DDInter verified)
     for x in ia:
         for y in ib:
@@ -136,7 +139,7 @@ def check_pair(a, b):
                     result["category"] = sev
 
     # 2. DDInter Live API (https://ddinter.scbdd.com/): details, management & literature references
-    for x in ia:
+    for x in (ia if live else []):
         for y in ib:
             ddinter_live = live_api.check_ddinter_live_interaction(x, y)
             if ddinter_live:
@@ -166,7 +169,7 @@ def check_pair(a, b):
                                f"{best['a'].title()} + {best['b'].title()}; semi-supervised model, DDInter 2.0)")
 
     # 5. OpenFDA Live Drug Interactions
-    for x in ia:
+    for x in (ia if live else []):
         for y in ib:
             live = live_api.check_openfda_interaction(x, y)
             if live:
@@ -280,12 +283,20 @@ def report():
     unmatched = [n for it, n, _ in entries if not it]
     truncated = len(checked) > MAX_ITEMS
     checked = checked[:MAX_ITEMS]
-    pairs = []
-    for i in range(len(checked)):
-        for j in range(i + 1, len(checked)):
-            r = check_pair(checked[i][0], checked[j][0])
-            r["a_source"], r["b_source"] = checked[i][2], checked[j][2]
-            pairs.append(r)
+    idx = [(i, j) for i in range(len(checked)) for j in range(i + 1, len(checked))]
+    # The default is fast (local verified database + monographs + model, well under a second). Live DDInter/OpenFDA
+    # lookups take seconds per pair, so they only run when the client asks (live: true) and the list is short.
+    live = bool(d.get("live")) and len(idx) <= LIVE_PAIR_LIMIT
+    app = current_app._get_current_object()
+
+    def one(ij):
+        with app.app_context():          # each worker thread needs its own app/db context
+            r = check_pair(checked[ij[0]][0], checked[ij[1]][0], live=live)
+        r["a_source"], r["b_source"] = checked[ij[0]][2], checked[ij[1]][2]
+        return r
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        pairs = list(pool.map(one, idx))
     warnings = safety.screen(g.user, [(it.brand, ingredients(it)) for it, _, _ in checked])
     counts = {k: sum(1 for p in pairs if p["category"] == k)
               for k in ("high", "moderate", "low", "duplicate", "documented", "unknown")}
@@ -293,4 +304,4 @@ def report():
              else "low" if counts["low"] or counts["documented"] else "none")
     return jsonify(connected=_predictor is not None, medicines=[{"name": n, "source": src} for _, n, src in checked],
                    unmatched=unmatched, truncated=truncated, pairs=pairs, safety=warnings, counts=counts,
-                   level=level, live_apis=live_api.get_live_apis_status())
+                   level=level, live_checked=live, live_apis=live_api.get_live_apis_status())

@@ -10,7 +10,7 @@ from flask import Blueprint, current_app, g, jsonify, request, send_file, send_f
 from . import interactions
 from .auth import error, login_required, phone_problem
 from .ai import interaction_adapter, live_api
-from .ai import prescription_extract
+from .ai import prescription_extract, text_match
 from .ai import model2_adapter as model2
 from .models import Activity, Generic, Medication, Notification, Product, Record, db, log
 
@@ -141,8 +141,8 @@ def upload_record():
         pass
     r = Record(user_id=g.user.id, title=title, category=cat, file_data=data,
                record_date=rdate or None, original_name=f.filename[:255], stored_name=stored)
-    if cat == "Prescription":
-        r.extracted = _read_prescription(data, ext)
+    if cat == "Prescription" and not (request.form.get("mode") or "").startswith("Store"):
+        r.extracted = _read_prescription(data, ext)   # "Store only (manual)" skips automatic reading
     db.session.add(r)
     log(g.user.id, f"Uploaded {title}")
     db.session.commit()
@@ -165,6 +165,43 @@ def _catalog_match(name):
     p = (Product.query.filter(db.func.lower(Product.brand) == n.lower()).first()
          or Product.query.filter(Product.brand.ilike(n + "%")).order_by(db.func.length(Product.brand)).first())
     return {"id": p.id, "brand": p.brand, "generic": p.generic, "strength": p.strength} if p else None
+
+
+_BRANDS = {}
+
+
+def _brand_index():
+    """{lowercase brand: brand} for text matching; loaded once per process (about 21k names)."""
+    if not _BRANDS:
+        for (b,) in db.session.query(Product.brand).distinct():
+            if b and len(b) >= 4:
+                _BRANDS.setdefault(b.strip().lower(), b.strip())
+    return _BRANDS
+
+
+@bp.post("/records/<int:rid>/read-text")
+@login_required
+def read_record_text(rid):
+    """Free reader: the browser OCRs the photo (Tesseract.js) and sends only the text; medicines are found by
+    matching words against the catalog. Works without any paid API key."""
+    r = owned(Record, rid)
+    if r.category != "Prescription":
+        return error("Only prescriptions can be read automatically")
+    txt = (request.get_json(silent=True) or {}).get("text")
+    if not isinstance(txt, str) or not txt.strip() or len(txt) > 30000:
+        return error("No readable text was sent")
+    meds = text_match.find_medicines(txt, _brand_index())
+    for m in meds:
+        m["match"] = _catalog_match(m["name"])
+    if meds:
+        r.extracted = {"status": "ok", "message": "", "doctor": None, "date": None, "diagnosis": None,
+                       "medicines": meds, "imported": False, "engine": "browser-ocr"}
+    else:
+        r.extracted = {"status": "error", "engine": "browser-ocr", "imported": False,
+                       "message": "No medicine names from the catalog were recognised in this photo. Use a clearer, "
+                                  "well-lit photo of a printed prescription, or add the medicines manually."}
+    db.session.commit()
+    return jsonify(r.to_dict())
 
 
 @bp.post("/records/<int:rid>/extract")
