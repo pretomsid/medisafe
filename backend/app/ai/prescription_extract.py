@@ -98,28 +98,60 @@ def _gemini(data, ext):
     body = {"contents": [{"parts": [{"inline_data": {"mime_type": mime, "data": base64.standard_b64encode(data).decode()}},
                                     {"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0}}
-    models = [m for m in (os.environ.get("GEMINI_MODEL"), "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash") if m]
-    why = "no response"
-    for model in dict.fromkeys(models):
+    key = os.environ["GEMINI_API_KEY"]
+    errors = []
+    for model in _gemini_models(requests, key):
         try:
             r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                              headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"], "Content-Type": "application/json"},
-                              json=body, timeout=40)
+                              headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json=body, timeout=35)
             if r.status_code != 200:
                 msg = ""
                 try:
                     msg = r.json().get("error", {}).get("message", "")
                 except Exception:
                     pass
-                why = f"HTTP {r.status_code} ({model}) {msg[:120]}".strip()
-                if r.status_code in (400, 401, 403, 429):   # bad key / quota / bad request: another model will not help
+                errors.append(f"{model}: HTTP {r.status_code} {msg[:90]}".strip())
+                if r.status_code in (401, 403, 429):   # bad key / no access / quota: another model will not help
                     break
-                continue                                     # 404 etc: this model name is gone, try the next one
+                continue                                # 400/404/5xx: try the next model
             out = json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
+            _GEMINI_OK["model"] = model                 # remember what worked for this process
             return _finish(out)
         except Exception as e:
-            why = f"{type(e).__name__} ({model})"
-    return {"status": "error", "message": f"Could not read this file automatically. {why}"}
+            errors.append(f"{model}: {type(e).__name__}")
+    return {"status": "error", "message": "Could not read this file automatically. " + " | ".join(errors[-3:])}
+
+
+_GEMINI_OK = {}      # model that last worked
+_GEMINI_LIST = {}    # cached model discovery
+
+
+def _gemini_models(requests, key):
+    """Model names change often, so ask Gemini which models exist instead of hard-coding them.
+    Order: GEMINI_MODEL (if set), the one that last worked, then newest non-preview 'flash' models that can generateContent."""
+    import re
+    out = [m for m in (os.environ.get("GEMINI_MODEL"), _GEMINI_OK.get("model")) if m]
+    if "names" not in _GEMINI_LIST:
+        names = []
+        try:
+            r = requests.get("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
+                             headers={"x-goog-api-key": key}, timeout=10)
+            cands = []
+            for m in r.json().get("models", []) if r.status_code == 200 else []:
+                n = m.get("name", "").replace("models/", "")
+                if ("generateContent" not in m.get("supportedGenerationMethods", []) or "flash" not in n
+                        or re.search(r"image|tts|live|audio|embed|thinking|exp|lite|robotics|computer|learnlm", n)):
+                    continue
+                v = re.search(r"(\d+(?:\.\d+)?)", n)
+                cands.append((0 if "preview" in n else 1, float(v.group(1)) if v else 0.0, n))
+            names = [n for _, _, n in sorted(cands, reverse=True)][:4]
+        except Exception:
+            names = []
+        if names:
+            _GEMINI_LIST["names"] = names
+        else:   # discovery failed: fall back to likely names for this call only
+            return list(dict.fromkeys(out + ["gemini-flash-latest", "gemini-2.5-flash"]))
+    return list(dict.fromkeys(out + _GEMINI_LIST["names"]))[:4]
 
 
 def _claude(data, ext):

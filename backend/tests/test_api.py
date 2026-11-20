@@ -326,3 +326,48 @@ def test_store_only_mode_skips_reading(client):
                                           "mode": "Store only (manual)", "file": (io.BytesIO(PDF), "rx.pdf")},
                     content_type="multipart/form-data")
     assert r.status_code == 201 and r.get_json()["extracted"] is None
+
+
+def test_gemini_model_discovery_and_fallback(monkeypatch):
+    """Model names change; the reader asks Gemini which flash models exist and tries the newest first."""
+    import requests as rq
+    from app.ai import prescription_extract as px
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    px._GEMINI_LIST.clear(); px._GEMINI_OK.clear()
+    ok_json = {"is_prescription": True, "doctor_name": "Dr X", "prescription_date": None, "diagnosis": None,
+               "medicines": [{"name": "Pantonix", "strength": "40 mg", "dose": None, "frequency": "1+0+1",
+                              "duration": None, "uncertain": True}]}
+    calls = []
+
+    class R:
+        def __init__(self, code, body): self.status_code, self._b = code, body
+        def json(self): return self._b
+
+    def fake_get(url, **kw):
+        return R(200, {"models": [
+            {"name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-3.8-flash-image", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/gemini-3.9-pro", "supportedGenerationMethods": ["generateContent"]},
+            {"name": "models/text-embedding", "supportedGenerationMethods": ["embedContent"]}]})
+
+    def fake_post(url, **kw):
+        calls.append(url.split("/models/")[1].split(":")[0])
+        if "3.8-flash" in url:
+            return R(404, {"error": {"message": "gone"}})
+        return R(200, {"candidates": [{"content": {"parts": [{"text": json.dumps(ok_json)}]}}]})
+
+    import json
+    monkeypatch.setattr(rq, "get", fake_get)
+    monkeypatch.setattr(rq, "post", fake_post)
+    res = px.extract(b"x", "jpg")
+    assert calls == ["gemini-3.8-flash", "gemini-2.5-flash"]      # newest first, then falls back on 404
+    assert res["status"] == "ok" and res["medicines"][0]["name"] == "Pantonix"
+    assert px._GEMINI_OK["model"] == "gemini-2.5-flash"
+    calls.clear(); px.extract(b"x", "jpg")
+    assert calls[0] == "gemini-2.5-flash"                          # remembers the working model
+    monkeypatch.setattr(rq, "post", lambda url, **kw: R(429, {"error": {"message": "quota"}}))
+    px._GEMINI_OK.clear()
+    bad = px.extract(b"x", "jpg")
+    assert bad["status"] == "error" and "429" in bad["message"]
